@@ -15,9 +15,10 @@ class Device
 
  public:
   ibv_device_attr *device_attr;
-  explicit Device(ibv_device* d, struct ibv_context *dc): device(d), device_ctx(dc), device_attr(new ibv_device_attr)
+  explicit Device(ibv_device* d): device(d), device_attr(new ibv_device_attr)
   {
     name = ibv_get_device_name(device);
+    device_ctx = ibv_open_device(device);
     int r = ibv_query_device(device_ctx, device_attr);
     if (r != 0) {
         std::cout << "failed to query device name: " << name << " ret: " << r << std::endl;
@@ -26,7 +27,9 @@ class Device
     }
   }
 
-  ~Device() { }
+  ~Device() {
+    ibv_close_device(device_ctx);
+  }
 
   const char* get_name()
   {
@@ -39,16 +42,16 @@ class Device
 class DeviceList
 {
   struct ibv_device ** device_list;
-  struct ibv_context ** device_context_list;
+  struct ibv_context * device_context;
   int num;
   Device** devices;
- public:
-  explicit DeviceList(void): device_list(ibv_get_device_list(&num)), device_context_list(rdma_get_devices(&num))
+  public:
+  explicit DeviceList(void): device_list(ibv_get_device_list(&num))
   {
     devices = new Device*[num];
 
     for (int i = 0;i < num; ++i) {
-      devices[i] = new Device(device_list[i], device_context_list[i]);
+      devices[i] = new Device(device_list[i]);
     }
   }
 
@@ -60,8 +63,6 @@ class DeviceList
 
     delete []devices;
     ibv_free_device_list(device_list);
-
-    rdma_free_devices(device_context_list);
   }
 
   Device* get_device(const char* device_name)
