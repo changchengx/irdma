@@ -348,7 +348,7 @@ static int poll_completion(struct resources *res)
 
 		/* check the completion status (here we don't care about the completion opcode */
 		if (wc.status != IBV_WC_SUCCESS) {
-			fprintf(stderr, "got bad completion with status: 0x%x, vendor syndrome: 0x%x\n", wc.status, wc.vendor_err);
+			fprintf(stdout, " got bad completion with ibv_wc wr_id: 0x%lx, status:0x%x, opcode: 0x%x, byte_len: 0x%x, local qp number: 0x%x, remote qp number: 0x%x\n", wc.wr_id, wc.status, wc.opcode, wc.byte_len, wc.qp_num, wc.src_qp);
 			rc = 1;
 		} else {
 			fprintf(stdout, " ibv_wc wr_id: 0x%lx, status:0x%x, opcode: 0x%x, byte_len: 0x%x, local qp number: 0x%x, remote qp number: 0x%x\n", wc.wr_id, wc.status, wc.opcode, wc.byte_len, wc.qp_num, wc.src_qp);
@@ -814,6 +814,48 @@ static int modify_qp_to_rtr(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t dli
 	return rc;
 }
 
+static int modify_qp_to_error(struct ibv_qp *qp)
+{
+	struct ibv_qp_attr qpa;
+	memset(&qpa, 0, sizeof(qpa));
+	qpa.qp_state = IBV_QPS_ERR;
+	if (ibv_modify_qp(qp, &qpa, IBV_QP_STATE)) {
+		fprintf(stderr, " failed to transition to error qp number:0x%x\n", qp->qp_num);
+		return -1;
+	}
+	fprintf(stdout, " switch to error qp number:0x%x\n", qp->qp_num);
+	return 0;
+}
+
+static int query_qp_state(struct ibv_qp *qp)
+{
+	struct ibv_qp_attr qpa;
+	struct ibv_qp_init_attr qpia;
+
+	int r = ibv_query_qp(qp, &qpa, IBV_QP_STATE, &qpia);
+	if (r) {
+		fprintf(stderr, " failed to query qp state, qp number:0x%x\n", qp->qp_num);
+		return -1;
+	}
+	fprintf(stdout, " qp number: 0x%x, state: 0x%x\n", qp->qp_num, qpa.qp_state);
+	return qpa.qp_state;
+}
+
+static int get_remote_qpn(struct ibv_qp *qp)
+{
+	struct ibv_qp_attr qpa;
+	struct ibv_qp_init_attr qpia;
+
+	int r = ibv_query_qp(qp, &qpa, IBV_QP_DEST_QPN, &qpia);
+	if (r) {
+		fprintf(stderr, " failed to query remote qp number, local qp number:0x%x\n", qp->qp_num);
+		return -1;
+	}
+	fprintf(stdout, " local qp number: 0x%x, remote qp number: 0x%x\n", qp->qp_num, qpa.dest_qp_num);
+	return qpa.dest_qp_num;
+}
+
+
 /******************************************************************************
 * Function: modify_qp_to_rts
 *
@@ -1160,16 +1202,28 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "failed to connect QPs\n");
 		goto main_exit;
 	}
+	query_qp_state(res.qp);
 	fprintf(stdout, "*********qp connected***********\n");
 
 	/* let the server post the sr */
-	fprintf(stdout, "**********server begin send beacon************\n");
-	if (!config.server_name)
+	fprintf(stdout, "**********force qp into error state ************\n");
+	if (!config.server_name) {
+	if (modify_qp_to_error(res.qp)) {
+		fprintf(stderr, "failed to transition to error\n");
+		goto main_exit;
+	}
+	}
+	if (!config.server_name) {
+		fprintf(stdout, "**********server post beacon************\n");
 		if (post_send_beacon(&res)) {
 			fprintf(stderr, "failed to post sr\n");
 			goto main_exit;
 		}
+	}
 
+//	query_qp_state(res.qp);
+
+//	get_remote_qpn(res.qp);
 	/* in both sides we expect to get a completion */
 	if (poll_completion(&res)) {
 		fprintf(stderr, "poll completion failed\n");
