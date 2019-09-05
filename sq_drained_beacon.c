@@ -367,6 +367,7 @@ static int modify_qp_to_error(struct resources *res)
 	fprintf(stderr, "failed to trasition to Error state\n");
     return -1;
   }
+  fprintf(stdout, "QP state was change to Error\n");
   return 0;
 }
 
