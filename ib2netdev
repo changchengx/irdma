@@ -1,0 +1,151 @@
+#! /bin/bash
+
+# Copyright (C) 2019  Liu Changcheng <changcheng.liu@aliyun.com>
+# Author: Liu Changcheng <changcheng.liu@aliyun.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+usage()
+{
+	echo "$(basename $0) <options>"
+	echo "-h, --help                print help message"
+	echo "-v, --verbose             print more info"
+}
+
+verbose=0
+
+case $1 in
+	"-h" | "--help")
+		usage
+		exit 0
+		;;
+	"-v")
+		verbose=1
+		;;
+esac
+
+if (( $# > 1 )); then
+	usage
+	exit -1
+fi
+
+if (( $# == 1 )) && [ "$1" != "-v" ]; then
+	usage
+	exit -1
+fi
+
+Mellanox="0x15b3"
+Intel="0x8086"
+
+netdevs=`grep "${Intel}\|${Mellanox}" /sys/class/net/*/device/vendor -H | sed -n -e 's/\/sys\/class\/net\/\(.*\)\/device\/vendor.*/\1/p'`
+if [ "x$netdevs" == "x" ]; then
+	echo "No net devs, exit"
+    exit -1
+fi
+
+if [ ! -d /sys/class/infiniband ]; then
+	echo "No RNIC, exit"
+	exit -1
+fi
+ib_pci_path_lists=`ls /sys/bus/pci/devices/*/infiniband | grep -v '^$' | sed -n -e 's/\:$/\//;N;s/\n//gp'`
+ibdevs=`echo $ib_pci_path_lists | tr ' ' '\n' | rev | cut -d '/' -f 1 | rev`
+
+for ibdev in $ibdevs; do
+	ibdev_resource=$(cat /sys/class/infiniband/$ibdev/device/resource)
+	for netdev in $netdevs; do
+		netdev_resource=$(cat "/sys/class/net/$netdev/device/resource")
+		if [ "x$netdev_resource" == "x$ibdev_resource" ]; then
+			netdev_devid_path="/sys/class/net/$netdev/dev_id"
+			netdev_devport_path="/sys/class/net/$netdev/dev_port"
+
+			net_devid=0
+			if [ -f $netdev_devid_path ]; then
+				net_devid=$(cat $netdev_devid_path)
+				net_devid=$(printf "%d" $net_devid)
+			fi
+
+			net_port=0
+			if [ -f $netdev_devport_path ]; then
+				net_port=$(cat $netdev_devport_path)
+				net_port=$(printf "%d" $net_port)
+			fi
+
+			if [ $net_port -gt $net_devid ]; then
+				net_devid=$net_port
+			fi
+
+
+			ib_port=$(( net_devid + 1))
+
+			netdev_carrier_path="/sys/class/net/$netdev/carrier"
+			if [ -f $netdev_carrier_path ]; then
+				link_state=$(cat $netdev_carrier_path 2> /dev/null)
+				if [ "xx"$link_state == "xx"1 ]; then
+					link_state="Up"
+				else
+					link_state="Down"
+				fi
+			else
+				link_state="NA"
+			fi
+
+			netdev_ip=`ifconfig $netdev | grep 'inet ' | awk '{print $2}'`
+			numa_node=`cat /sys/class/net/${netdev}/device/numa_node`
+			numa_cpu=`cat /sys/devices/system/node/node${numa_node}/cpulist`
+
+			if [ $verbose -eq 1 ]; then
+				ibdev_portstate_path="/sys/class/infiniband/$ibdev/ports/$ib_port/state"
+				ibdev_deviceid_path="/sys/class/infiniband/$ibdev/device/device"
+				ibdev_fwver_path="/sys/class/infiniband/$ibdev/fw_ver"
+				ibdev_vpd_path="/sys/class/infiniband/$ibdev/device/vpd"
+
+				# read port state
+				if [ -f $ibdev_portstate_path ]; then
+					ibstate=$(printf "%-6s" $(cat $ibdev_portstate_path | awk '{print $2}'))
+				else
+					ibstate="NA"
+				fi
+
+				# read device
+				if [ -f $ibdev_deviceid_path ]; then
+					ib_port=$(printf "%d" $(cat $ibdev_deviceid_path))
+				else
+					ib_port="NA"
+				fi
+
+				# read FW version
+				if [ -f $ibdev_fwver_path ]; then
+					fwver=$(cat $ibdev_fwver_path)
+				else
+					fwver="NA"
+				fi
+
+				if [ -f $ibdev_vpd_path ]; then
+					tmp=$IFS
+					IFS=":"
+					vpd_content=`cat $ibdev_vpd_path | tr -d '\0'`
+					device_description=$(printf "%-35s" $(echo $vpd_content | strings | head -1))
+					partion_id=$(printf "%-11s" $(echo $vpd_content | strings | head -4 | tail -1 | awk '{print $1}'))
+					IFS=$tmp
+				else
+					device_description=""
+					partion_id="NA"
+				fi
+				echo "$ibdev ($ib_port - $partion_id) $device_description fw $fwver port $ib_port ($ibstate) ==> $netdev ($link_state) $netdev_ip"
+			else
+				echo "$ibdev port $ib_port ==> $netdev ($link_state) $netdev_ip numa_node:$numa_node cpu_list:$numa_cpu"
+			fi
+		fi
+	done
+done
