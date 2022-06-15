@@ -8,6 +8,7 @@
 #include <getopt.h>
 
 #include <rdma/rdma_cma.h>
+#include <infiniband/mlx5dv.h>
 
 struct cm_context {
 	struct rdma_event_channel* event_ch;
