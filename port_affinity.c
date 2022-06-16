@@ -24,6 +24,8 @@ struct cm_context {
 	struct sockaddr addr;
 };
 
+#define MSG_SIZE 16384
+#define MSG_CNT  3
 struct memory_domain {
 	struct ibv_device *dev;
 	int    port_idx;
@@ -310,8 +312,8 @@ struct ibv_qp *create_rc_qp(const struct memory_domain *md)
 	qp_init_attr.qp_context          = md->ctx;
 	qp_init_attr.send_cq             = md->cq;
 	qp_init_attr.recv_cq             = md->cq;
-	qp_init_attr.cap.max_send_wr     = 2;
-	qp_init_attr.cap.max_recv_wr     = 2;
+	qp_init_attr.cap.max_send_wr     = MSG_CNT;
+	qp_init_attr.cap.max_recv_wr     = MSG_CNT;
 	qp_init_attr.cap.max_send_sge    = 1;
 	qp_init_attr.cap.max_recv_sge    = 1;
 	qp_init_attr.qp_type             = IBV_QPT_RC;
@@ -408,17 +410,17 @@ int init_md(struct cm_context *cm_ctx, struct memory_domain *md)
 		goto close_ctx;
 	}
 
-	md->cq = ibv_create_cq(md->ctx, 2, NULL, NULL, 0);
+	md->cq = ibv_create_cq(md->ctx, 2 * MSG_CNT, NULL, NULL, 0);
 	if (md->cq == NULL) {
 		goto free_pd;
 	}
 
-	md->addr = malloc(256 * 2);
+	md->addr = malloc(MSG_SIZE * MSG_CNT);
 	if (md->addr == NULL) {
 		goto free_cq;
 	}
 
-	md->mr = ibv_reg_mr(md->pd, md->addr, 256 * 2, IB_UVERBS_ACCESS_LOCAL_WRITE | IB_UVERBS_ACCESS_REMOTE_READ);
+	md->mr = ibv_reg_mr(md->pd, md->addr, MSG_SIZE * MSG_CNT, IB_UVERBS_ACCESS_LOCAL_WRITE | IB_UVERBS_ACCESS_REMOTE_READ);
 	if (md->mr == NULL) {
 		goto free_addr;
 	}
@@ -505,25 +507,34 @@ int client_post_recv(struct memory_domain *md)
 {
 	int ret_val = 0;
 
-	struct ibv_sge sge0, sge1;
-	struct ibv_recv_wr wr0, wr1;
+	struct ibv_sge sge0, sge1, sge2;
+	struct ibv_recv_wr wr0, wr1, wr2;
 	struct ibv_recv_wr *bad_rwr;
 
-	sge0.addr = (uint64_t)md->mr->addr;
-	sge0.length = 256;
-	sge0.lkey = md->mr->lkey;
+	sge0.addr   = (uint64_t)md->mr->addr;
+	sge0.length = MSG_SIZE;
+	sge0.lkey   = md->mr->lkey;
 
-	sge1.addr = (uint64_t)md->mr->addr + sge0.length;
+	sge1.addr   = sge0.addr + sge0.length;
 	sge1.length = sge0.length;
-	sge1.lkey = sge0.lkey;
+	sge1.lkey   = md->mr->lkey;
 
-	wr1.wr_id = 1;
-	wr1.next = NULL;
+	sge2.addr   = sge1.addr + sge1.length;
+	sge2.length = sge1.length;
+	sge2.lkey   = md->mr->lkey;
+
+	wr2.wr_id   = 2;
+	wr2.next    = NULL;
+	wr2.sg_list = &sge2;
+	wr2.num_sge = 1;
+
+	wr1.wr_id   = 1;
+	wr1.next    = &wr2;
 	wr1.sg_list = &sge1;
 	wr1.num_sge = 1;
 
-	wr0.wr_id = 1;
-	wr0.next = &wr1;
+	wr0.wr_id   = 0;
+	wr0.next    = &wr1;
 	wr0.sg_list = &sge0;
 	wr0.num_sge = 1;
 
@@ -544,7 +555,7 @@ int server_post_send(struct memory_domain *md, uint64_t wr_id)
 	struct ibv_send_wr *bad_swr;
 
 	sge.addr = (uint64_t)md->mr->addr;
-	sge.length = 256;
+	sge.length = MSG_SIZE;
 	sge.lkey = md->mr->lkey;
 
 	wr.wr_id = wr_id;
@@ -738,7 +749,7 @@ int run_server(struct cm_context *cm_ctx, struct memory_domain *md)
 		return ret_val;
 	}
 
-	ret_val = server_post_send(md, 1);
+	ret_val = server_post_send(md, 0);
 	if (ret_val) {
 		return ret_val;
 	}
