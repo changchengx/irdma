@@ -21,7 +21,6 @@ struct cm_context {
 	int is_server;
 	char *server_addr;
 	char *server_port;
-	struct sockaddr addr;
 };
 
 #define MSG_SIZE 16384
