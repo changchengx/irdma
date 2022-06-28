@@ -69,7 +69,7 @@ class cm_context:
         qp_init_attr = QPInitAttr(qp_type = e.IBV_QPT_UD,
                                   scq = self.dummy_cq,
                                   rcq = self.dummy_cq,
-                                  cap = qp_cap)
+                                  cap = qp_cap, sq_sig_all = 0)
         self.dummy_qp = QP(self.id.pd, qp_init_attr)
 
     def set_addrinfo(self):
@@ -106,18 +106,32 @@ class cm_context:
         self.listen_id.bind_addr(self.ai)
 
     def init_md(self):
-        if self.is_server == True:
-            self.md.cq = CQ(self.listen_id.context, 3, None, None, 0)
-            self.md.mr = MR(self.listen_id.pd, 16384 * 3, e.IBV_ACCESS_LOCAL_WRITE)
-        else:
-            self.md.cq = CQ(self.id.context, 3, None, None, 0)
-            self.md.mr = MR(self.id.pd, 16384 * 3, e.IBV_ACCESS_LOCAL_WRITE)
+        self.md.cq = CQ(self.id.context, 3, None, None, 0)
+        self.md.mr = MR(self.id.pd, 16384 * 3, e.IBV_ACCESS_LOCAL_WRITE)
 
     def qp_rst2init(self):
         qp_attr = QPAttr()
         qp_attr.qp_access_flags = e.IBV_ACCESS_LOCAL_WRITE
         qp_attr.port_num = 1
         self.md.qp.to_init(qp_attr)
+
+    def qp_init2rtr(self):
+        qp_attr = self.md.qp_attr
+        qp_attr.dest_qp_num = self.md.remote_qp_num
+        qp_attr.rq_psn = 0
+        self.md.qp.to_rtr(qp_attr)
+
+    def qp_rtr2rts(self):
+        qp_attr, _ = self.md.qp.query(e.IBV_QP_STATE)
+
+        qp_attr.qp_state = e.IBV_QPS_RTS
+        qp_attr.max_rd_atomic = 1;
+        qp_attr.timeout = 0x12;
+        qp_attr.retry_cnt = 7;
+        qp_attr.rnr_retry = 7;
+        qp_attr.sq_psn = 0;
+
+        self.md.qp.to_rts(qp_attr)
 
     def create_rc_qp(self):
         qp_cap = QPCap(max_send_wr = 3, max_recv_wr = 3,
@@ -128,11 +142,22 @@ class cm_context:
                                   cap = qp_cap)
         self.md.qp = QP(self.id.pd, qp_init_attr)
 
+    def init_qp_attr(self):
+        self.md.qp_attr, self.md.qp_attr_mask = self.id.init_qp_attr(e.IBV_QPS_RTR)
+
     def client_connect(self):
         conn_param = ConnParam(resources = 2, depth = 2, retry = 5, rnr_retry = 5, qp_num = self.dummy_qp.qp_num, data_len = 56)
         private_data = self.md.local_qp_num.to_bytes(4, byteorder='little')
         conn_param.set_private_data(private_data)
         self.id.connect(conn_param)
+
+    def wait_conn_resp(self):
+        cm_event = CMEvent(self.event_ch)
+        assert cm_event.event_type == ce.RDMA_CM_EVENT_CONNECT_RESPONSE
+
+        private_data = cm_event.private_data
+        self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
+        cm_event.ack_cm_event()
 
     def run_client(self):
         self.init_md()
@@ -146,6 +171,12 @@ class cm_context:
 
         self.client_connect()
 
+        self.wait_conn_resp()
+
+        self.init_qp_attr()
+
+        self.qp_init2rtr()
+
     def listen_connect(self):
         self.listen_id.listen(backlog = 1)
 
@@ -156,20 +187,38 @@ class cm_context:
 
         private_data = cm_event.private_data
         self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
-
         cm_event.ack_cm_event()
+
+    def accept_conn(self):
+        conn_param = ConnParam(resources = 2, depth = 2, retry = 5, rnr_retry = 5, qp_num = self.dummy_qp.qp_num, data_len = 56)
+        private_data = self.md.local_qp_num.to_bytes(4, byteorder='little')
+        conn_param.set_private_data(private_data)
+        self.id.accept(conn_param)
 
     def run_server(self):
         self.listen_connect()
 
         self.wait_conn_req()
 
+        self.init_qp_attr()
+
+        self.init_md()
+
+        self.create_rc_qp()
+        self.qp_rst2init()
+        self.md.local_qp_num = self.md.qp.qp_num
+        self.qp_init2rtr()
+        self.qp_rtr2rts()
+
+        self.dummy_ud_qp()
+
+        self.accept_conn()
+
 def main():
     parser = ArgsParser()
     parser.parse_args()
 
     cm_ctx = cm_context()
-    md     = memory_domain()
 
     cm_ctx.is_server   = parser.args['server']
     cm_ctx.server_addr = parser.args['addr']
