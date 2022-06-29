@@ -9,6 +9,7 @@ from pyverbs.cq import CQ
 from pyverbs.mr import MR
 from pyverbs.qp import QPCap, QPInitAttr, QPAttr, QP
 from pyverbs.cmid import CMID, AddrInfo, CMEventChannel, CMEvent, ConnParam
+from pyverbs.wr import SGE, SendWR, RecvWR
 import pyverbs.cm_enums as ce
 import pyverbs.enums as e
 
@@ -159,6 +160,17 @@ class cm_context:
         self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
         cm_event.ack_cm_event()
 
+    def client_post_recv(self):
+        sge0 = SGE(self.md.mr.buf, 16384, self.md.mr.lkey)
+        sge1 = SGE(sge0.addr + sge0.length, sge0.length, self.md.mr.lkey)
+        sge2 = SGE(sge1.addr + sge1.length, sge1.length, self.md.mr.lkey)
+
+        rwr2 = RecvWR(wr_id = 2, num_sge = 1, sg = [sge2])
+        rwr1 = RecvWR(wr_id = 1, num_sge = 1, sg = [sge1], next_wr = rwr2)
+        rwr0 = RecvWR(wr_id = 0, num_sge = 1, sg = [sge0], next_wr = rwr1)
+
+        self.md.qp.post_recv(rwr0)
+
     def run_client(self):
         self.init_md()
 
@@ -176,6 +188,8 @@ class cm_context:
         self.init_qp_attr()
 
         self.qp_init2rtr()
+
+        self.client_post_recv()
 
     def listen_connect(self):
         self.listen_id.listen(backlog = 1)
