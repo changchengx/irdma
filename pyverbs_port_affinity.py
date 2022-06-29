@@ -8,6 +8,7 @@ import argparse
 
 from pyverbs.cq import CQ
 from pyverbs.mr import MR
+from pyverbs.providers.mlx5.mlx5dv import Mlx5QP
 from pyverbs.qp import QPCap, QPInitAttr, QPAttr, QP
 from pyverbs.cmid import CMID, AddrInfo, CMEventChannel, CMEvent, ConnParam
 from pyverbs.wr import SGE, SendWR, RecvWR
@@ -303,6 +304,7 @@ class cm_context:
 
         self.wait_conn_establish()
 
+        Mlx5QP.modify_lag_port(self.md.qp, 1)
         self.server_post_send(0)
         wc_num = 0
         while wc_num != 1:
