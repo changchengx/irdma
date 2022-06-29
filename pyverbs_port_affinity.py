@@ -163,6 +163,13 @@ class cm_context:
     def client_establish(self):
         self.id.establish()
 
+    def client_disconnect(self):
+        self.id.disconnect()
+
+    def wait_discon_event(self):
+        cm_event = CMEvent(self.event_ch)
+        assert cm_event.event_type == ce.RDMA_CM_EVENT_DISCONNECTED
+
     def client_post_recv(self):
         sge0 = SGE(self.md.mr.buf, 16384, self.md.mr.lkey)
         sge1 = SGE(sge0.addr + sge0.length, sge0.length, self.md.mr.lkey)
@@ -212,6 +219,9 @@ class cm_context:
                 wr_id = wc.wr_id
                 val = int.from_bytes(self.md.mr.read(4, 16384 * wr_id), byteorder='little')
                 assert val == 0xcafebeef + wr_id
+
+        self.client_disconnect()
+        self.wait_discon_event()
 
     def listen_connect(self):
         self.listen_id.listen(backlog = 1)
@@ -281,6 +291,8 @@ class cm_context:
         wc_num = 0
         while wc_num != 1:
             wc_num, _ = self.md.cq.poll(num_entries = 1)
+
+        self.wait_discon_event()
 
 def main():
     parser = ArgsParser()
