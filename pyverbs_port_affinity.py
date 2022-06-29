@@ -37,7 +37,6 @@ class memory_domain:
         self.qp  = None
 
         self.mr   = None
-        self.addr = None
 
         self.local_qp_num  = 0
         self.remote_qp_num = 0
