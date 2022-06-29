@@ -3,6 +3,7 @@
 # Copyright(c) 2022 Liu, Changcheng <changcheng.liu@aliyun.com>
 
 import sys
+import time
 import argparse
 
 from pyverbs.cq import CQ
@@ -208,6 +209,8 @@ class cm_context:
 
             self.create_cmid()
             self.init_client_cm()
+
+            time.sleep(2)
 
             self.init_md()
 
