@@ -184,7 +184,6 @@ class cm_context:
         self.init_md()
 
         self.create_rc_qp()
-        self.qp_rst2init()
 
         self.md.local_qp_num = self.md.qp.qp_num
 
@@ -195,6 +194,8 @@ class cm_context:
         self.wait_conn_resp()
 
         self.init_qp_attr()
+
+        self.qp_rst2init()
 
         self.qp_init2rtr()
 
