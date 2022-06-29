@@ -156,7 +156,6 @@ class cm_context:
         cm_event = CMEvent(self.event_ch)
 
         if cm_event.event_type == ce.RDMA_CM_EVENT_REJECTED:
-            print("got rejected")
             cm_event.ack_cm_event()
             return 1
         else:
@@ -164,7 +163,6 @@ class cm_context:
             private_data = cm_event.private_data
             self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
             cm_event.ack_cm_event()
-            print("client get remote_qp_num: ", self.md.remote_qp_num)
             return 0
 
     def client_establish(self):
@@ -240,7 +238,6 @@ class cm_context:
                 wc_num, wcs = self.md.cq.poll(num_entries = 1)
 
             wcs_num = wcs_num + wc_num
-            print(wc_num, wcs_num)
 
             for idx in range(wc_num):
                 wc = wcs[idx]
