@@ -214,6 +214,12 @@ class cm_context:
         conn_param.set_private_data(private_data)
         self.id.accept(conn_param)
 
+    def wait_conn_establish(self):
+        cm_event = CMEvent(self.event_ch)
+        assert cm_event.event_type == ce.RDMA_CM_EVENT_ESTABLISHED
+
+        cm_event.ack_cm_event()
+
     def run_server(self):
         self.listen_connect()
 
@@ -232,6 +238,8 @@ class cm_context:
         self.dummy_ud_qp()
 
         self.accept_conn()
+
+        self.wait_conn_establish()
 
 def main():
     parser = ArgsParser()
