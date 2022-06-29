@@ -196,6 +196,23 @@ class cm_context:
 
         self.client_establish()
 
+        wcs_num = 0
+        while wcs_num < 3:
+            wc_num = 0
+            wcs = []
+            while wc_num == 0:
+                wc_num, wcs = self.md.cq.poll(num_entries = 1)
+
+            wcs_num = wcs_num + wc_num
+            print(wc_num, wcs_num)
+
+            for idx in range(wc_num):
+                wc = wcs[idx]
+                assert wc.status == e.IBV_WC_SUCCESS
+                wr_id = wc.wr_id
+                val = int.from_bytes(self.md.mr.read(4, 16384 * wr_id), byteorder='little')
+                assert val == 0xcafebeef + wr_id
+
     def listen_connect(self):
         self.listen_id.listen(backlog = 1)
 
@@ -220,6 +237,15 @@ class cm_context:
 
         cm_event.ack_cm_event()
 
+    def server_post_send(self, wrid):
+        val = int(0xcafebeef + wrid).to_bytes(4, byteorder = 'little')
+        self.md.mr.write(val, length = 4, offset = 0)
+
+        sge = SGE(self.md.mr.buf, 16384, self.md.mr.lkey)
+        swr = SendWR(wr_id = wrid, opcode = e.IBV_WR_SEND, num_sge = 1, sg = [sge], send_flags=e.IBV_SEND_SIGNALED)
+
+        self.md.qp.post_send(swr)
+
     def run_server(self):
         self.listen_connect()
 
@@ -240,6 +266,21 @@ class cm_context:
         self.accept_conn()
 
         self.wait_conn_establish()
+
+        self.server_post_send(0)
+        wc_num = 0
+        while wc_num != 1:
+            wc_num, _ = self.md.cq.poll(num_entries = 1)
+
+        self.server_post_send(1)
+        wc_num = 0
+        while wc_num != 1:
+            wc_num, _ = self.md.cq.poll(num_entries = 1)
+
+        self.server_post_send(2)
+        wc_num = 0
+        while wc_num != 1:
+            wc_num, _ = self.md.cq.poll(num_entries = 1)
 
 def main():
     parser = ArgsParser()
