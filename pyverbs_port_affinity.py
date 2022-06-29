@@ -153,11 +153,18 @@ class cm_context:
 
     def wait_conn_resp(self):
         cm_event = CMEvent(self.event_ch)
-        assert cm_event.event_type == ce.RDMA_CM_EVENT_CONNECT_RESPONSE
 
-        private_data = cm_event.private_data
-        self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
-        cm_event.ack_cm_event()
+        if cm_event.event_type == ce.RDMA_CM_EVENT_REJECTED:
+            print("got rejected")
+            cm_event.ack_cm_event()
+            return 1
+        else:
+            assert cm_event.event_type == ce.RDMA_CM_EVENT_CONNECT_RESPONSE
+            private_data = cm_event.private_data
+            self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
+            cm_event.ack_cm_event()
+            print("client get remote_qp_num: ", self.md.remote_qp_num)
+            return 0
 
     def client_establish(self):
         self.id.establish()
@@ -191,7 +198,26 @@ class cm_context:
 
         self.client_connect()
 
-        self.wait_conn_resp()
+        while self.wait_conn_resp() != 0:
+            self.dummy_qp.close()
+            self.dummy_cq.close()
+            self.md.qp.close()
+            self.md.cq.close()
+            self.md.mr.close()
+            self.id.close()
+
+            self.create_cmid()
+            self.init_client_cm()
+
+            self.init_md()
+
+            self.create_rc_qp()
+
+            self.md.local_qp_num = self.md.qp.qp_num
+
+            self.dummy_ud_qp()
+
+            self.client_connect()
 
         self.init_qp_attr()
 
