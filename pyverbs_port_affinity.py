@@ -160,6 +160,9 @@ class cm_context:
         self.md.remote_qp_num = int.from_bytes(private_data[:3], 'little')
         cm_event.ack_cm_event()
 
+    def client_establish(self):
+        self.id.establish()
+
     def client_post_recv(self):
         sge0 = SGE(self.md.mr.buf, 16384, self.md.mr.lkey)
         sge1 = SGE(sge0.addr + sge0.length, sge0.length, self.md.mr.lkey)
@@ -190,6 +193,8 @@ class cm_context:
         self.qp_init2rtr()
 
         self.client_post_recv()
+
+        self.client_establish()
 
     def listen_connect(self):
         self.listen_id.listen(backlog = 1)
