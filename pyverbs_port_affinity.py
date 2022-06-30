@@ -343,20 +343,28 @@ class cm_context:
         self.get_slave_interface_name()
 
         Mlx5QP.modify_lag_port(self.md.qp, 1)
+        tx_bytes_start = self.get_tx_bytes(self.bond_slaves[0])
         self.server_post_send(0)
         wc_num = 0
         while wc_num != 1:
             wc_num, _ = self.md.cq.poll(num_entries = 1)
+        assert self.get_tx_bytes(self.bond_slaves[0]) - tx_bytes_start > 16384
 
+        self.set_link_state(self.bond_slaves[0], "down")
+        tx_bytes_start = self.get_tx_bytes(self.bond_slaves[1])
         self.server_post_send(1)
         wc_num = 0
         while wc_num != 1:
             wc_num, _ = self.md.cq.poll(num_entries = 1)
+        assert self.get_tx_bytes(self.bond_slaves[1]) - tx_bytes_start > 16384
 
+        self.set_link_state(self.bond_slaves[0], "up")
+        tx_bytes_start = self.get_tx_bytes(self.bond_slaves[0])
         self.server_post_send(2)
         wc_num = 0
         while wc_num != 1:
             wc_num, _ = self.md.cq.poll(num_entries = 1)
+        assert self.get_tx_bytes(self.bond_slaves[0]) - tx_bytes_start > 16384
 
         self.wait_discon_event()
 
