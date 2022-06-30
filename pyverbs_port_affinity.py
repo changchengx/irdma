@@ -124,6 +124,11 @@ class cm_context:
 
         return int(tx_bytes)
 
+    def set_link_state(self, slave_nic, operation):
+        cmd = "sudo ip link set " + operation + " " + slave_nic
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, executable="/bin/bash")
+        time.sleep(4)
+
     def init_client_cm(self):
         self.id.resolve_addr(self.ai)
         cm_event = CMEvent(self.event_ch)
