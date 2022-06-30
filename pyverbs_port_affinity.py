@@ -5,6 +5,7 @@
 import sys
 import time
 import argparse
+import subprocess
 
 from pyverbs.cq import CQ
 from pyverbs.mr import MR
@@ -53,6 +54,9 @@ class cm_context:
         self.listen_id = None
         self.id        = None
 
+        self.bond_master = None
+        self.bond_slaves = None
+
         self.dummy_qp  = None
         self.dummy_cq  = None
 
@@ -91,6 +95,24 @@ class cm_context:
         else:
             self.id = CMID(creator = self.event_ch,
                            port_space=ce.RDMA_PS_TCP)
+
+    def get_slave_interface_name(self):
+        cmd = "ls -l /sys/class/infiniband/" + self.id.dev_name + "/device/net/*/master | rev | cut -d '/' -f 1 | rev"
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, executable="/bin/bash")
+        bond_master, error = process.communicate()
+        bond_master = bond_master.strip()
+        if isinstance(bond_master, bytes):
+            bond_master = bond_master.decode()
+
+        cmd = "cat /sys/class/net/" + bond_master + "/bonding/slaves"
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, executable="/bin/bash")
+        bond_slaves, error = process.communicate()
+        bond_slaves = bond_slaves.strip()
+        if isinstance(bond_slaves, bytes):
+            bond_slaves = bond_slaves.decode()
+
+        self.bond_master = bond_master
+        self.bond_slaves = bond_slaves.split()
 
     def init_client_cm(self):
         self.id.resolve_addr(self.ai)
@@ -302,6 +324,8 @@ class cm_context:
         self.accept_conn()
 
         self.wait_conn_establish()
+
+        self.get_slave_interface_name()
 
         Mlx5QP.modify_lag_port(self.md.qp, 1)
         self.server_post_send(0)
