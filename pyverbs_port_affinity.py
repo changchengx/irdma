@@ -114,6 +114,16 @@ class cm_context:
         self.bond_master = bond_master
         self.bond_slaves = bond_slaves.split()
 
+    def get_tx_bytes(self, slave_nic):
+        cmd = "ethtool -S " + slave_nic + " | awk '/tx_bytes_phy/{print$2}'"
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, executable="/bin/bash")
+        tx_bytes, error = process.communicate()
+        tx_bytes = tx_bytes.strip()
+        if isinstance(tx_bytes, bytes):
+            tx_bytes = tx_bytes.decode()
+
+        return int(tx_bytes)
+
     def init_client_cm(self):
         self.id.resolve_addr(self.ai)
         cm_event = CMEvent(self.event_ch)
