@@ -52,7 +52,6 @@ class cm_context:
         self.event_ch  = CMEventChannel()
         self.listen_id = None
         self.id        = None
-        self.dev_name  = None
 
         self.dummy_qp  = None
         self.dummy_cq  = None
