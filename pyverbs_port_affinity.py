@@ -116,7 +116,7 @@ class cm_context:
         self.bond_slaves.sort()
 
     def get_tx_bytes(self, slave_nic):
-        cmd = "ethtool -S " + slave_nic + " | awk '/tx_bytes_phy/{print$2}'"
+        cmd = "ethtool -S " + slave_nic + " | awk '/tx_bytes_phy:/{print$2}'"
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, executable="/bin/bash")
         tx_bytes, error = process.communicate()
         tx_bytes = tx_bytes.strip()
