@@ -113,6 +113,7 @@ class cm_context:
 
         self.bond_master = bond_master
         self.bond_slaves = bond_slaves.split()
+        self.bond_slaves.sort()
 
     def get_tx_bytes(self, slave_nic):
         cmd = "ethtool -S " + slave_nic + " | awk '/tx_bytes_phy/{print$2}'"
