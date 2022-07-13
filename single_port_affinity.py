@@ -166,10 +166,20 @@ class RCTrafficTest():
             self.get_slave_interface_name()
             self.create_resources()
             self.connect_qps()
+
+            self.start_time = datetime.datetime.now()
+
+            self.init_tx_packets()
+
             self.rc_traffic()
+
+            self.verify_tx_packets()
 
         except Exception as ex:
             raise ex
+
+    def is_not_timeout(self):
+        return (datetime.datetime.now() - self.start_time).seconds < self.timeout
 
     def get_slave_interface_name(self):
         cmd = "ls -l /sys/class/infiniband/" + self.dev_name + "/device/net/*/master | rev | cut -d '/' -f 1 | rev"
@@ -228,22 +238,47 @@ class RCTrafficTest():
     def poll_send(self):
         self.send_qp.poll()
 
+    def init_tx_packets(self):
+        self.tx_packets_port1 = 0
+        self.tx_packets_port2 = 0
+
+        self.tx_packets_port1_init = self.get_inteface_tx_packets(self.bond_slaves[0])
+        self.tx_packets_port2_init = self.get_inteface_tx_packets(self.bond_slaves[1])
+
+    def verify_tx_packets(self):
+        tx_packets_port1_now = self.get_inteface_tx_packets(self.bond_slaves[0])
+        tx_packets_port2_now = self.get_inteface_tx_packets(self.bond_slaves[1])
+
+        assert tx_packets_port1_now - self.tx_packets_port1_init >= self.tx_packets_port1
+        assert tx_packets_port2_now - self.tx_packets_port2_init >= self.tx_packets_port2
+
+    def update_tx_packets(self):
+        port_num, active_port_num = Mlx5QP.query_lag_port(self.send_qp.qp)
+
+        if active_port_num == 1 :
+            self.tx_packets_port1 += 1
+        else :
+            self.tx_packets_port2 += 1
+
     def rc_traffic(self):
         Mlx5QP.modify_lag_port(self.send_qp.qp, 1)
 
-        port_num, active_port_num = Mlx5QP.query_lag_port(self.send_qp.qp)
-        assert port_num == 1
+        affinity_port_num, active_port_num = Mlx5QP.query_lag_port(self.send_qp.qp)
+        assert affinity_port_num == 1
 
-        self.post_recv()
+        while self.is_not_timeout():
+            self.post_recv()
 
-        send_val = 0xcafebeef
-        self.post_send(send_val)
+            send_val = 0xcafebeef
+            self.post_send(send_val)
 
-        self.poll_send()
-        self.poll_recv()
+            self.poll_send()
+            self.poll_recv()
 
-        recv_val = int.from_bytes(self.recv_qp.mr.read(4, offset = 0), byteorder='little')
-        assert recv_val == send_val
+            recv_val = int.from_bytes(self.recv_qp.mr.read(4, offset = 0), byteorder='little')
+            assert recv_val == send_val
+
+            self.update_tx_packets()
 
     def create_resources(self):
         self.send_qp = RCResources(dev_name = self.dev_name,
