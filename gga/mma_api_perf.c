@@ -345,17 +345,17 @@ int main(int argc, char *argv[])
 
 	for (uint32_t length = 64; length <= MR_LEN; length *= 2) {
 		uint64_t elpase = 0;
-		for (uint32_t i = 0; i < 100000; i++) {
+		for (uint32_t i = 0; i < 10000; i++) {
 			sw_warm_cache(mr);
 
 			struct timespec start_time, end_time;
-			clock_gettime(CLOCK_REALTIME, &start_time);
+			clock_gettime(CLOCK_MONOTONIC, &start_time);
 			local_cache_invalid(qp, mr, length); // GGA/MMA w/o writeback: rq_mr[0, MR_LEN}
-			clock_gettime(CLOCK_REALTIME, &end_time);
-			elpase = (uint64_t)end_time.tv_sec * 1000000000 + end_time.tv_nsec -
+			clock_gettime(CLOCK_MONOTONIC, &end_time);
+			elpase += (uint64_t)end_time.tv_sec * 1000000000 + end_time.tv_nsec -
 					  ((uint64_t)start_time.tv_sec * 1000000000 + start_time.tv_nsec);
 		}
-		printf("%08u : %08d, avg %05.3f\n", length, elpase, (double)elpase / 1000.0);
+		printf("%08u : %08ld, avg %05.3lf\n", length, elpase, (double)elpase / 10000.0);
 	}
 
 	return 0;
