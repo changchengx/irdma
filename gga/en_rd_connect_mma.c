@@ -768,6 +768,6 @@ int main(int argc, char *argv[])
 
 	gettimeofday(&end, NULL);
 	timeval_subtract(&elpase, &end, &start);
-	printf("%ds:%dusec\n", elpase.tv_sec, elpase.tv_usec);
+	printf("%lds:%ldusec\n", elpase.tv_sec, elpase.tv_usec);
 	return 0;
 }
