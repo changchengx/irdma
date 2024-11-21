@@ -542,7 +542,7 @@ void create_raw_eth_pkt(struct pingpong_context *ctx,
     eth_header->eth_type = htons(eth_type);
 
     // generate ipv4 header
-    pkt_size = pkt_size - sizeof(struct eth_header) - 4; // no vlan 802.1Q tag optional space
+    pkt_size = pkt_size - sizeof(struct eth_header); // no vlan 802.1Q tag optional space
     uint16_t ip_next_protocol = 0x11; // UDP_PROTOCOL
     void *ip_header_buf = (void*)eth_header + sizeof(struct eth_header);
     union IP_V4_header_raw raw;
@@ -695,7 +695,7 @@ int main(int argc, char *argv[])
     if (param.machine == 0) {
         struct ibv_sge sge = {};
         sge.addr = (uintptr_t)ctx.buf;
-        sge.length = ctx.param->buff_size - 4; // 4 bytes for FCS
+        sge.length = ctx.param->buff_size;
         sge.lkey = ctx.mr->lkey;
 
         struct ibv_send_wr sr = {};
