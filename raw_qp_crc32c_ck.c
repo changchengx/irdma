@@ -1078,7 +1078,8 @@ int main(int argc, char *argv[])
             printf("failed to register sig mkey\n");
         }
     } else {
-        if (reg_sig_mkey(&ctx, SIG_MODE_INSERT_ON_WIRE)) {
+        *(uint32_t*)ctx.pi_mr->addr = 0x6f32a61f; // Client is TX side, CRC32C need to be existed in memory domain
+        if (reg_sig_mkey(&ctx, SIG_MODE_CHECK_MEM_WIRE)) {
             printf("failed to register sig mkey\n");
         }
     }
@@ -1117,6 +1118,11 @@ int main(int argc, char *argv[])
         } else {
             printf("Client has send the data\n");
         }
+
+        if (check_sig_mkey(ctx.sig_mkey) < 0) {
+            return -1;
+        }
+        if (inv_sig_mkey(&ctx)) return -1;
     } else {
         struct ibv_sge sge[2];
         sge[0].addr = (uintptr_t)ctx.mr->addr;
