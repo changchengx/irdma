@@ -328,8 +328,6 @@ static int resources_destroy(struct resource *res)
 
     if (free_mr(&res->pi_mr)) rc = -1;
 
-    if (free_mr(&res->data_mr)) rc = -1;
-
     if (destroy_cq(&res->cq)) rc = -1;
 
     ibv_dealloc_pd(res->pd);
@@ -501,12 +499,12 @@ struct resource* alloc_offload_res(char *dev_name)
     return res;
 }
 
-uint32_t dv_get_crc32c(struct resource *res, uint32_t crc, void *_data, size_t length)
+uint32_t dv_get_crc32c(struct resource *res, uint32_t crc, void *data, size_t length)
 {
 #ifndef MR_OPT
     res->buf_len = length;
     res->seed = crc;
-    res->data_mr = ibv_reg_mr(res->pd, _data, res->buf_len, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ);
+    res->data_mr = ibv_reg_mr(res->pd, data, res->buf_len, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ);
 
     if (reg_sig_mkey(res, SIG_MODE_INSERT_ON_MEM)) {
         fprintf(stderr, "Error: Failed reg sig mkey\n");
@@ -543,6 +541,10 @@ uint32_t dv_get_crc32c(struct resource *res, uint32_t crc, void *_data, size_t l
         fprintf(stderr, "Error: failed to clear sig mkey\n");
         return -1;
     }
+    if (ibv_dereg_mr(res->data_mr)) {
+        fprintf(stderr, "Error: failed to dereg mr\n");
+        return -1;
+    }
 #endif
 
     return *(uint32_t*)res->pi_mr->addr ^ 0xffffffff;
@@ -552,62 +554,79 @@ int main(int argc, char *argv[])
 {
     struct resource* res = alloc_offload_res(argv[1]);
 
-    void *data_buf = malloc(4096);
-    memset(data_buf, 'a', 4096);
+    uint32_t length = 1 * 1024 * 1024 * 1024;
+    void *data_buf = malloc(length);
+    if (data_buf == NULL) {
+        fprintf(stderr, "Failed to allocate 2GB buffer\n");
+    }
+    memset(data_buf, 'a', length);
+    uint32_t data_chunk = length / 4096;
 
     // Open /dev/random for reading
-    int read_bytes = read(open("/dev/random", O_RDONLY), data_buf, 4096);
-    if (-1 == read_bytes || 4096 != read_bytes) {
-        fprintf(stderr, "Error reading from /dev/random\n");
-        return -1;
+    int fd = open("/dev/random", O_RDONLY);
+    for (int i = 0; i < data_chunk; i++) {
+        int read_bytes = read(fd, data_buf + i * 4096, 4096);
+        if (-1 == read_bytes || 4096 != read_bytes) {
+            fprintf(stderr, "Error reading from /dev/random\n");
+            return -1;
+        }
     }
+    close(fd);
 
-#ifdef MR_OPT
-    res->buf_len = 4096;
-    res->seed = 0;
-    res->data_mr = ibv_reg_mr(res->pd, data_buf, 4096, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ);
-
-    if (reg_sig_mkey(res, SIG_MODE_INSERT_ON_MEM)) {
-        fprintf(stderr, "Error: Failed reg sig mkey\n");
-        return -1;
-    }
-#endif
-
-    uint32_t sw_crc32c = crc32c(0, data_buf, 4096);
-    uint32_t hw_crc32c = dv_get_crc32c(res, 0, data_buf, 4096);
-    uint32_t run_times = 100000;
-
+    uint32_t sw_crc32c;
+    uint32_t hw_crc32c;
+    uint32_t run_times = 10;
+    unsigned long hw_us = 0;
     struct timeval cur_time;
-    gettimeofday(&cur_time, NULL);
-    unsigned long start_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
-    for (int i = 0; i < run_times; i++) {
-        hw_crc32c = dv_get_crc32c(res, 0, data_buf, 4096);
-    }
-    gettimeofday(&cur_time, NULL);
-    unsigned long cur_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
-    unsigned long hw_us = cur_time_us - start_time_us;
-#ifdef MR_OPT
-    if (inv_sig_mkey(res)) {
-        fprintf(stderr, "Error: failed to clear sig mkey\n");
-        return -1;
-    }
-#endif
+    unsigned long start_time_us, cur_time_us;
 
-    sw_crc32c = crc32c(0, data_buf, 4096);
+    for (int j = 0; j < data_chunk; j++) {
+        #ifdef MR_OPT
+            res->buf_len = 4096;
+            res->seed = 0;
+            res->data_mr = ibv_reg_mr(res->pd, data_buf + 4096 * j, 4096, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ);
+
+            if (reg_sig_mkey(res, SIG_MODE_INSERT_ON_MEM)) {
+                fprintf(stderr, "Error: Failed reg sig mkey\n");
+                return -1;
+            }
+        #endif
+        gettimeofday(&cur_time, NULL);
+        unsigned long start_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
+        for (int i = 0; i < run_times; i++) {
+            hw_crc32c = dv_get_crc32c(res, 0, data_buf + 4096 * j, 4096);
+        }
+        gettimeofday(&cur_time, NULL);
+        cur_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
+        hw_us += (cur_time_us - start_time_us);
+
+        #ifdef MR_OPT
+            if (inv_sig_mkey(res)) {
+                fprintf(stderr, "Error: failed to clear sig mkey\n");
+                return -1;
+            }
+            if (ibv_dereg_mr(res->data_mr)) {
+                fprintf(stderr, "Error: failed to dereg mr\n");
+                return -1;
+            }
+        #endif
+    }
+
     gettimeofday(&cur_time, NULL);
     start_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
-    for (int i = 0; i < run_times; i++) {
-        sw_crc32c = crc32c(0, data_buf, 4096);
+    for (int j = 0; j < data_chunk; j++) {
+        for (int i = 0; i < run_times; i++) {
+            sw_crc32c = crc32c(0, data_buf + 4096 * j, 4096);
+        }
     }
     gettimeofday(&cur_time, NULL);
-
     cur_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
     unsigned long sw_us = cur_time_us - start_time_us;
 
     if (hw_crc32c != sw_crc32c) {
         fprintf(stderr, "hw_crc32c:0x%08x != sw_crc32c:0x%08x\n", hw_crc32c, sw_crc32c);
     } else {
-        printf("block CRC32C: 0x%08x, hw_us:%fus, sw_us:%fus\n", hw_crc32c, ((float)hw_us)/run_times, ((float)sw_us)/run_times);
+        printf("block CRC32C: 0x%08x, hw_us:%fus, sw_us:%fus\n", hw_crc32c, ((float)hw_us) / run_times / data_chunk, ((float)sw_us) / run_times / data_chunk);
     }
 
 free_res_and_exit:
