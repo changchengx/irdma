@@ -573,10 +573,16 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    uint32_t sw_crc32c = crc32c(0, data_buf, 4096);
+    uint32_t hw_crc32c = dv_get_crc32c(res, 0, data_buf, 4096);
+    uint32_t run_times = 100000;
+
     struct timeval cur_time;
     gettimeofday(&cur_time, NULL);
     unsigned long start_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
-    uint32_t hw_crc32c = dv_get_crc32c(res, 0, data_buf, 4096);
+    for (int i = 0; i < run_times; i++) {
+        hw_crc32c = dv_get_crc32c(res, 0, data_buf, 4096);
+    }
     gettimeofday(&cur_time, NULL);
     unsigned long cur_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
     unsigned long hw_us = cur_time_us - start_time_us;
@@ -587,17 +593,21 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    sw_crc32c = crc32c(0, data_buf, 4096);
     gettimeofday(&cur_time, NULL);
     start_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
-    uint32_t sw_crc32c = crc32c(0, data_buf, 4096);
+    for (int i = 0; i < run_times; i++) {
+        sw_crc32c = crc32c(0, data_buf, 4096);
+    }
     gettimeofday(&cur_time, NULL);
+
     cur_time_us = (cur_time.tv_sec * 1000000) + (cur_time.tv_usec);
     unsigned long sw_us = cur_time_us - start_time_us;
 
     if (hw_crc32c != sw_crc32c) {
         fprintf(stderr, "hw_crc32c:0x%08x != sw_crc32c:0x%08x\n", hw_crc32c, sw_crc32c);
     } else {
-        printf("block CRC32C: 0x%08x, hw_us:%02luus, sw_us:%02luus\n", hw_crc32c, hw_us, sw_us);
+        printf("block CRC32C: 0x%08x, hw_us:%fus, sw_us:%fus\n", hw_crc32c, ((float)hw_us)/run_times, ((float)sw_us)/run_times);
     }
 
 free_res_and_exit:
