@@ -147,22 +147,19 @@ static int destroy_sig_mkey(struct mlx5dv_mkey **mkey)
     return 0;
 }
 
-static int configure_sig_mkey(struct resources *res, int src_idx, struct mlx5dv_sig_block_attr *sig_attr)
+static
+int configure_mkey_layout(struct resources *res, int src_idx)
 {
     struct ibv_qp_ex *qpx = ibv_qp_to_qp_ex(res->qp);
     struct mlx5dv_qp_ex *dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(qpx);
     struct mlx5dv_mkey *mkey = res->sig_mkey[src_idx];
-    struct mlx5dv_mkey_conf_attr conf_attr = {};
 
     /* !!! Do not use IBV_ACCESS_RELAXED_ORDERING */
     uint32_t access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE;
 
     ibv_wr_start(qpx);
     qpx->wr_id = 0;
-    qpx->wr_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
-
-    mlx5dv_wr_mkey_configure(dv_qp, mkey, 3, &conf_attr);
-    mlx5dv_wr_set_mkey_access_flags(dv_qp, access_flags);
+    qpx->wr_flags = IBV_SEND_INLINE;
 
     struct mlx5dv_mr_interleaved mr_interleaved[2];
     /* data */
@@ -176,10 +173,36 @@ static int configure_sig_mkey(struct resources *res, int src_idx, struct mlx5dv_
     mr_interleaved[1].bytes_skip = 0;
     mr_interleaved[1].lkey = res->pi_mr[src_idx]->lkey;
 
-    mlx5dv_wr_set_mkey_layout_interleaved(dv_qp, 1, 2, mr_interleaved);
-    mlx5dv_wr_set_mkey_sig_block(dv_qp, sig_attr);
+    mlx5dv_wr_mr_interleaved(dv_qp, mkey, access_flags, 1, 2, mr_interleaved);
 
     return ibv_wr_complete(qpx);
+}
+
+static
+int configure_sig_mkey(struct resources *res, int src_idx, struct mlx5dv_sig_block_attr *sig_attr)
+{
+    struct ibv_qp_ex *qpx = ibv_qp_to_qp_ex(res->qp);
+    struct mlx5dv_qp_ex *dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(qpx);
+    struct mlx5dv_mkey *mkey = res->sig_mkey[src_idx];
+    struct mlx5dv_mkey_conf_attr conf_attr = {};
+
+    if (configure_mkey_layout(res, src_idx)) {
+        err("failed to configure mkey layout\n");
+        return -1;
+    }
+
+    ibv_wr_start(qpx);
+    qpx->wr_id = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+
+    mlx5dv_wr_mkey_configure(dv_qp, mkey, 1, &conf_attr);
+    mlx5dv_wr_set_mkey_sig_block(dv_qp, sig_attr);
+
+    if (ibv_wr_complete(qpx)) {
+        err("failed to set mkey sig block\n");
+        return -1;
+    }
+    return 0;
 }
 
 enum sig_mode {
