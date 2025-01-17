@@ -401,7 +401,7 @@ struct mlx5dv_mkey *create_sig_mkey(struct ibv_pd *pd)
 {
     struct mlx5dv_mkey_init_attr mkey_attr = {};
     mkey_attr.pd = pd;
-    mkey_attr.max_entries = 1;
+    mkey_attr.max_entries = 4;
     mkey_attr.create_flags = MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT | MLX5DV_MKEY_INIT_ATTR_FLAGS_BLOCK_SIGNATURE;
     struct mlx5dv_mkey *sig_mkey;
 
