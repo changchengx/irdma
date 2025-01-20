@@ -4,7 +4,7 @@
  */
 
 /* Build:
- * $ gcc -o raw_qp raw_ethernet_send.c -libverbs
+ * $ gcc -o raw_qp raw_ethernet_send.c -libverbs -lmlx5
  *
  * Server env:
  * | $ show_gids | grep mlx5_0 | grep v2 |  grep '\<3\>'
