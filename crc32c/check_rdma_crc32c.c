@@ -21,7 +21,7 @@
  *   mlx5_4  1      3     0000:0000:0000:0000:0000:ffff:c0a8:1e0d 192.168.30.13   v2    enp130s0f0np0
  *
  * Build:
- * $ gcc -o rdma_crc rdma_crc32c.c -libverbs -lmlx5
+ * $ gcc -o rdma_crc check_rdma_crc32c.c -libverbs -lmlx5
  *
  * Run:
  * $ ./rdma_crc mlx5_4
