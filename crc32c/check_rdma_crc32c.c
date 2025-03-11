@@ -310,7 +310,7 @@ static struct ibv_qp *create_qp(struct ibv_context *ctxt, struct ibv_pd* pd, str
     struct ibv_qp_cap qp_cap = {
         .max_send_wr = 2,
         .max_recv_wr = 1,
-        .max_send_sge = 1,
+        .max_send_sge = 2,
         .max_recv_sge = 1,
         .max_inline_data = 64 * 2,
     };
@@ -579,7 +579,8 @@ int main(int argc, char *argv[])
     info("\nrun RDMA_READ with CRC32C offload on %s\n\n", ibv_get_device_name(res.ib_ctx->device));
     res.pd = ibv_alloc_pd(res.ib_ctx);
     res.cq = ibv_create_cq(res.ib_ctx, 16, NULL, NULL, 0);
-    res.src_data_mr = alloc_mr(res.pd, 4096);
+    res.src_data_mr = alloc_mr(res.pd, 20 + 4096);
+    memset(res.src_data_mr->addr, 'b', 20);
     res.dst_data_mr = alloc_mr(res.pd, 4096);
     res.pi_mr = alloc_mr(res.pd, 4);
     res.sig_mkey = create_sig_mkey(res.pd);
@@ -590,25 +591,33 @@ int main(int argc, char *argv[])
     if (reg_sig_mkey(&res, SIG_MODE_INSERT_ON_MEM))
         return -1;
 
+    struct ibv_mr* header_mr = alloc_mr(res.pd, 20);
+    memset(header_mr->addr, 'c', 20); // data payload is filled with b'b'
+
     struct ibv_send_wr sr;
-    struct ibv_sge sge;
+    struct ibv_sge sge[2];
     struct ibv_send_wr *bad_wr = NULL;
 
-    sge.addr = 0; //it's 0 here(base zero), do not use dst_data_mr->addr
-    sge.length = 4096; //it's 4096 here, do not use 4096 + 4
-    sge.lkey = res.sig_mkey->lkey;
+    sge[0].addr = (uint64_t)(header_mr->addr);
+    sge[0].length = 20;
+    sge[0].lkey = header_mr->lkey;
+
+    sge[1].addr = 0;
+    sge[1].length = 4096;
+    sge[1].lkey = res.sig_mkey->lkey;
 
     /* prepare the send work request */
     memset(&sr, 0, sizeof(sr));
     sr.next = NULL;
-    sr.sg_list = &sge;
-    sr.num_sge = 1;
+    sr.sg_list = sge;
+    sr.num_sge = 2;
     sr.opcode = IBV_WR_RDMA_READ;
     sr.send_flags = IBV_SEND_SIGNALED;
 
     sr.wr.rdma.remote_addr = (uintptr_t)res.src_data_mr->addr;
     sr.wr.rdma.rkey = res.src_data_mr->rkey;
 
+    *(uint64_t*)res.pi_mr->addr = 0xcafebeef;
     if (ibv_post_send(res.qp, &sr, &bad_wr)) {
         err("ibv_post_send failed: opcode IBV_WR_RDMA_READ\n");
         return -1;
@@ -623,7 +632,7 @@ int main(int argc, char *argv[])
     if (*(uint32_t *)res.pi_mr->addr == 0x26c74ca2) {
         info("\n!!!! %s supports CRC32C offload under real test!!!!\n\n", ibv_get_device_name(res.ib_ctx->device));
     } else {
-        info("\n!!!! %s does not support CRC32C offload under real test!!!!\n\n", ibv_get_device_name(res.ib_ctx->device));
+        info("\n!!!! %s does not support CRC32C offload under real test, pi:0x%08x!!!!\n\n", ibv_get_device_name(res.ib_ctx->device), *(uint32_t*)res.pi_mr->addr);
     }
 
 free_res_and_exit:
