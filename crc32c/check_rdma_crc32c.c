@@ -568,6 +568,53 @@ uint32_t qp_self_connected(struct ibv_qp* qp)
     return 0;
 }
 
+static
+struct mlx5dv_mkey *create_indirect_mkey(struct resources *res, struct ibv_mr *head_data_mr)
+{
+    struct mlx5dv_mkey_init_attr mkey_attr = {};
+    mkey_attr.pd = res->pd;
+    mkey_attr.max_entries = 4;
+    mkey_attr.create_flags = MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT;
+
+    struct mlx5dv_mkey *mkey = mlx5dv_create_mkey(&mkey_attr);
+    if (!mkey)
+        err("mlx5dv_create_mkey: %s\n", strerror(errno));
+
+    struct ibv_qp_ex *qpx = ibv_qp_to_qp_ex(res->qp);
+    struct mlx5dv_qp_ex *dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(qpx);
+    struct mlx5dv_mkey_conf_attr conf_attr = {};
+    uint32_t access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+
+    ibv_wr_start(qpx);
+    qpx->wr_id = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+
+    mlx5dv_wr_mkey_configure(dv_qp, mkey, 2, &conf_attr);
+    mlx5dv_wr_set_mkey_access_flags(dv_qp, access_flags);
+
+    struct ibv_sge sge[2];
+    sge[0].addr = (uint64_t)(head_data_mr->addr);
+    sge[0].lkey = head_data_mr->lkey;
+    sge[0].length = 20;
+
+    sge[1].addr = 0;
+    sge[1].lkey = res->sig_mkey->lkey;
+    sge[1].length = 4096;
+
+    mlx5dv_wr_set_mkey_layout_list(dv_qp, 2, sge);
+
+    if (ibv_wr_complete(qpx) != 0)
+        fprintf(stderr, "failed to wrap indirect mkey\n");
+
+    if (poll_completion(res->qp->send_cq, IBV_WC_DRIVER1)) {
+        err("Failed to wrap indirect mkey\n");
+        return NULL;
+    }
+
+    info("wrapped the reg mkey and header key into indirect mkey:0x%08x\n", mkey->lkey);
+    return mkey;
+}
+
 int main(int argc, char *argv[])
 {
     struct resources res = {};
@@ -579,7 +626,8 @@ int main(int argc, char *argv[])
     info("\nrun RDMA_READ with CRC32C offload on %s\n\n", ibv_get_device_name(res.ib_ctx->device));
     res.pd = ibv_alloc_pd(res.ib_ctx);
     res.cq = ibv_create_cq(res.ib_ctx, 16, NULL, NULL, 0);
-    res.src_data_mr = alloc_mr(res.pd, 4096);
+    res.src_data_mr = alloc_mr(res.pd, 20 + 4096);
+    memset(res.src_data_mr->addr, 'b', 20);
     res.dst_data_mr = alloc_mr(res.pd, 4096);
     res.pi_mr = alloc_mr(res.pd, 4);
     res.sig_mkey = create_sig_mkey(res.pd);
@@ -590,13 +638,17 @@ int main(int argc, char *argv[])
     if (reg_sig_mkey(&res, SIG_MODE_INSERT_ON_MEM))
         return -1;
 
+    struct ibv_mr* header_mr = alloc_mr(res.pd, 20);
+    memset(header_mr->addr, 'c', 20); // data payload is filled with b'b'
+    struct mlx5dv_mkey *indirect_mkey = create_indirect_mkey(&res, header_mr);
+
     struct ibv_send_wr sr;
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
 
     sge.addr = 0; //it's 0 here(base zero), do not use dst_data_mr->addr
-    sge.length = 4096; //it's 4096 here, do not use 4096 + 4
-    sge.lkey = res.sig_mkey->lkey;
+    sge.length = 20 + 4096; //it's 4096 here, do not use 4096 + 4
+    sge.lkey = indirect_mkey->lkey;
 
     /* prepare the send work request */
     memset(&sr, 0, sizeof(sr));
@@ -609,6 +661,7 @@ int main(int argc, char *argv[])
     sr.wr.rdma.remote_addr = (uintptr_t)res.src_data_mr->addr;
     sr.wr.rdma.rkey = res.src_data_mr->rkey;
 
+    *(uint64_t*)res.pi_mr->addr = 0xcafebeef;
     if (ibv_post_send(res.qp, &sr, &bad_wr)) {
         err("ibv_post_send failed: opcode IBV_WR_RDMA_READ\n");
         return -1;
