@@ -46,9 +46,10 @@ struct resources {
     struct ibv_cq *cq;
     struct ibv_qp *qp;
 
-    struct ibv_mr *src_data_mr; /* MR for src data buffer */
-    struct ibv_mr *dst_data_mr; /* MR for data buffer */
-    struct ibv_mr *pi_mr;       /* MR for protection information buffer */
+    struct ibv_mr *dst_header_mr;  /* MR for dst header buffer */
+    struct ibv_mr *src_data_mr;    /* MR for src data buffer */
+    struct ibv_mr *dst_data_mr;    /* MR for data buffer */
+    struct ibv_mr *pi_mr;          /* MR for protection information buffer */
 
     struct mlx5dv_mkey *sig_mkey;
 };
@@ -168,19 +169,24 @@ static int configure_sig_mkey(struct resources *res, struct mlx5dv_sig_block_att
     mlx5dv_wr_mkey_configure(dv_qp, mkey, 3, &conf_attr);
     mlx5dv_wr_set_mkey_access_flags(dv_qp, access_flags);
 
-    struct mlx5dv_mr_interleaved mr_interleaved[2];
-    /* data */
-    mr_interleaved[0].addr = (uintptr_t)res->dst_data_mr->addr;
-    mr_interleaved[0].bytes_count = 4096;
+    struct mlx5dv_mr_interleaved mr_interleaved[3];
+    /* header */
+    mr_interleaved[0].addr = (uintptr_t)res->dst_header_mr->addr;
+    mr_interleaved[0].bytes_count = 20;
     mr_interleaved[0].bytes_skip = 0;
-    mr_interleaved[0].lkey = res->dst_data_mr->lkey;
-    /* protection */
-    mr_interleaved[1].addr = (uintptr_t)res->pi_mr->addr;
-    mr_interleaved[1].bytes_count = sizeof(uint32_t); // 4 bytes for crc32c result
+    mr_interleaved[0].lkey = res->dst_header_mr->lkey;
+    /* data */
+    mr_interleaved[1].addr = (uintptr_t)res->dst_data_mr->addr;
+    mr_interleaved[1].bytes_count = 4096;
     mr_interleaved[1].bytes_skip = 0;
-    mr_interleaved[1].lkey = res->pi_mr->lkey;
+    mr_interleaved[1].lkey = res->dst_data_mr->lkey;
+    /* protection */
+    mr_interleaved[2].addr = (uintptr_t)res->pi_mr->addr;
+    mr_interleaved[2].bytes_count = sizeof(uint32_t); // 4 bytes for crc32c result
+    mr_interleaved[2].bytes_skip = 0;
+    mr_interleaved[2].lkey = res->pi_mr->lkey;
 
-    mlx5dv_wr_set_mkey_layout_interleaved(dv_qp, 1, 2, mr_interleaved);
+    mlx5dv_wr_set_mkey_layout_interleaved(dv_qp, 1, 3, mr_interleaved);
     mlx5dv_wr_set_mkey_sig_block(dv_qp, sig_attr);
 
     return ibv_wr_complete(qpx);
@@ -395,6 +401,8 @@ static int resources_destroy(struct resources *res)
 
     if (free_mr(&res->dst_data_mr)) rc = -1;
 
+    if (free_mr(&res->dst_header_mr)) rc = -1;
+
     if (destroy_cq(&res->cq)) rc = -1;
 
     ibv_dealloc_pd(res->pd);
@@ -578,7 +586,8 @@ int main(int argc, char *argv[])
     info("\nrun RDMA_WRITE with CRC32C offload on %s\n\n", ibv_get_device_name(res.ib_ctx->device));
     res.pd = ibv_alloc_pd(res.ib_ctx);
     res.cq = ibv_create_cq(res.ib_ctx, 16, NULL, NULL, 0);
-    res.src_data_mr = alloc_mr(res.pd, 4096);
+    res.dst_header_mr = alloc_mr(res.pd, 20);
+    res.src_data_mr = alloc_mr(res.pd, 4116);
     res.dst_data_mr = alloc_mr(res.pd, 4096);
     res.pi_mr = alloc_mr(res.pd, 4);
     res.sig_mkey = create_sig_mkey(res.pd);
@@ -594,7 +603,7 @@ int main(int argc, char *argv[])
     struct ibv_send_wr *bad_wr = NULL;
 
     sge.addr = (uint64_t)(res.src_data_mr->addr);
-    sge.length = 4096;
+    sge.length = 4116;
     sge.lkey = res.src_data_mr->lkey;
 
     /* prepare the send work request */
