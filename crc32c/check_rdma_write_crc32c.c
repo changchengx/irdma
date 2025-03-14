@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
- * Copyright(c) 2025 Liu, Changcheng <changcheng.liu@aliyun.com>
+ * Copyright(c) 2025 Yang, Bin <biny993@qq.com>
  */
 
 #include <stdlib.h>
@@ -52,6 +52,7 @@ struct resources {
     struct ibv_mr *pi_mr;          /* MR for protection information buffer */
 
     struct mlx5dv_mkey *sig_mkey;
+    struct mlx5dv_mkey *src_mkey;  /* UMR for src side interleaving */
 };
 
 static const char *wc_opcode_str(enum ibv_wc_opcode opcode)
@@ -170,21 +171,21 @@ static int configure_sig_mkey(struct resources *res, struct mlx5dv_sig_block_att
     mlx5dv_wr_set_mkey_access_flags(dv_qp, access_flags);
 
     struct mlx5dv_mr_interleaved mr_interleaved[3];
-    /* header */
-    mr_interleaved[0].addr = (uintptr_t)res->dst_header_mr->addr;
-    mr_interleaved[0].bytes_count = 20;
-    mr_interleaved[0].bytes_skip = 0;
-    mr_interleaved[0].lkey = res->dst_header_mr->lkey;
     /* data */
-    mr_interleaved[1].addr = (uintptr_t)res->dst_data_mr->addr;
-    mr_interleaved[1].bytes_count = 4096;
-    mr_interleaved[1].bytes_skip = 0;
-    mr_interleaved[1].lkey = res->dst_data_mr->lkey;
+    mr_interleaved[0].addr = (uintptr_t)res->dst_data_mr->addr;
+    mr_interleaved[0].bytes_count = 4096;
+    mr_interleaved[0].bytes_skip = 0;
+    mr_interleaved[0].lkey = res->dst_data_mr->lkey;
     /* protection */
-    mr_interleaved[2].addr = (uintptr_t)res->pi_mr->addr;
-    mr_interleaved[2].bytes_count = sizeof(uint32_t); // 4 bytes for crc32c result
+    mr_interleaved[1].addr = (uintptr_t)res->pi_mr->addr;
+    mr_interleaved[1].bytes_count = sizeof(uint32_t); // 4 bytes for crc32c result
+    mr_interleaved[1].bytes_skip = 0;
+    mr_interleaved[1].lkey = res->pi_mr->lkey;
+    /* header */
+    mr_interleaved[2].addr = (uintptr_t)res->dst_header_mr->addr;
+    mr_interleaved[2].bytes_count = 20;
     mr_interleaved[2].bytes_skip = 0;
-    mr_interleaved[2].lkey = res->pi_mr->lkey;
+    mr_interleaved[2].lkey = res->dst_header_mr->lkey;
 
     mlx5dv_wr_set_mkey_layout_interleaved(dv_qp, 1, 3, mr_interleaved);
     mlx5dv_wr_set_mkey_sig_block(dv_qp, sig_attr);
@@ -292,6 +293,69 @@ static int inv_sig_mkey(struct resources *res)
     return rc;
 }
 
+static struct mlx5dv_mkey *create_src_mkey(struct ibv_pd *pd)
+{
+    struct mlx5dv_mkey_init_attr mkey_attr = {};
+    mkey_attr.pd = pd;
+    mkey_attr.max_entries = 2;  /* data + header */
+    mkey_attr.create_flags = MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT;
+    struct mlx5dv_mkey *mkey;
+
+    mkey = mlx5dv_create_mkey(&mkey_attr);
+    if (!mkey)
+        err("mlx5dv_create_mkey for src: %s\n", strerror(errno));
+
+    return mkey;
+}
+
+static int configure_src_mkey(struct resources *res)
+{
+    struct ibv_qp_ex *qpx = ibv_qp_to_qp_ex(res->qp);
+    struct mlx5dv_qp_ex *dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(qpx);
+    struct mlx5dv_mkey *mkey = res->src_mkey;
+    struct mlx5dv_mkey_conf_attr conf_attr = {};
+    uint32_t access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+
+    ibv_wr_start(qpx);
+    qpx->wr_id = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+
+    mlx5dv_wr_mkey_configure(dv_qp, mkey, 2, &conf_attr);
+    mlx5dv_wr_set_mkey_access_flags(dv_qp, access_flags);
+
+    struct mlx5dv_mr_interleaved mr_interleaved[2];
+    /* data part (offset 20, length 4096) */
+    mr_interleaved[0].addr = (uintptr_t)res->src_data_mr->addr + 20;
+    mr_interleaved[0].bytes_count = 4096;
+    mr_interleaved[0].bytes_skip = 0;
+    mr_interleaved[0].lkey = res->src_data_mr->lkey;
+    /* header part (offset 0, length 20) */
+    mr_interleaved[1].addr = (uintptr_t)res->src_data_mr->addr;
+    mr_interleaved[1].bytes_count = 20;
+    mr_interleaved[1].bytes_skip = 0;
+    mr_interleaved[1].lkey = res->src_data_mr->lkey;
+
+    mlx5dv_wr_set_mkey_layout_interleaved(dv_qp, 1, 2, mr_interleaved);
+
+    return ibv_wr_complete(qpx);
+}
+
+static int reg_src_mkey(struct resources *res)
+{
+    if (configure_src_mkey(res))
+        return -1;
+
+    info("Post src mkey configure WR, opcode DRIVER1\n");
+
+    if (poll_completion(res->qp->send_cq, IBV_WC_DRIVER1)) {
+        err("Failed to configure src MKEY\n");
+        return -1;
+    }
+    info("Src MKEY is configured\n");
+
+    return 0;
+}
+
 static int destroy_cq(struct ibv_cq **cq)
 {
     int rc;
@@ -366,7 +430,7 @@ static int free_mr(struct ibv_mr **mr)
     return rc;
 }
 
-struct ibv_mr * alloc_mr(struct ibv_pd *pd, size_t size)
+struct ibv_mr * alloc_mr(struct ibv_pd *pd, size_t size, char initvalue)
 {
     int mr_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE;
 
@@ -375,7 +439,7 @@ struct ibv_mr * alloc_mr(struct ibv_pd *pd, size_t size)
         err("calloc: %s\n", strerror(errno));
         return NULL;
     }
-    memset(ptr, 'a', size); // data payload is filled with b'a'
+    memset(ptr, initvalue, size); // data payload is filled with initvalue
 
     struct ibv_mr *mr = ibv_reg_mr(pd, ptr, size, mr_flags);
     if (!mr) {
@@ -394,6 +458,8 @@ static int resources_destroy(struct resources *res)
     ibv_destroy_qp(res->qp);
 
     if (destroy_sig_mkey(&res->sig_mkey)) rc = -1;
+
+    if (destroy_sig_mkey(&res->src_mkey)) rc = -1;
 
     if (free_mr(&res->pi_mr)) rc = -1;
 
@@ -586,15 +652,24 @@ int main(int argc, char *argv[])
     info("\nrun RDMA_WRITE with CRC32C offload on %s\n\n", ibv_get_device_name(res.ib_ctx->device));
     res.pd = ibv_alloc_pd(res.ib_ctx);
     res.cq = ibv_create_cq(res.ib_ctx, 16, NULL, NULL, 0);
-    res.dst_header_mr = alloc_mr(res.pd, 20);
-    res.src_data_mr = alloc_mr(res.pd, 4116);
-    res.dst_data_mr = alloc_mr(res.pd, 4096);
-    res.pi_mr = alloc_mr(res.pd, 4);
+    res.dst_header_mr = alloc_mr(res.pd, 20, 'c');
+    res.src_data_mr = alloc_mr(res.pd, 4116, 'a');
+    res.dst_data_mr = alloc_mr(res.pd, 4096, 'd');
+    res.pi_mr = alloc_mr(res.pd, 4, 'e');
+    res.src_mkey = create_src_mkey(res.pd);
     res.sig_mkey = create_sig_mkey(res.pd);
     res.qp = create_qp(res.ib_ctx, res.pd, res.cq, res.cq);
 
+    // fill src header with 'a'
+    memset((char*)res.src_data_mr->addr, 'b', 20);
+
     init_qp(res.qp);
     qp_self_connected(res.qp);
+
+    /* Configure src mkey to interleave data and header */
+    if (reg_src_mkey(&res))
+        return -1;
+
     if (reg_sig_mkey(&res, SIG_MODE_INSERT_ON_MEM))
         return -1;
 
@@ -602,9 +677,9 @@ int main(int argc, char *argv[])
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
 
-    sge.addr = (uint64_t)(res.src_data_mr->addr);
+    sge.addr = 0; // (uint64_t)(res.src_mkey->addr);
     sge.length = 4116;
-    sge.lkey = res.src_data_mr->lkey;
+    sge.lkey = res.src_mkey->lkey;
 
     /* prepare the send work request */
     memset(&sr, 0, sizeof(sr));
@@ -628,6 +703,24 @@ int main(int argc, char *argv[])
     if (check_sig_mkey(res.sig_mkey) < 0) return -1;
 
     if (inv_sig_mkey(&res)) return -1;
+    /* Validate dst header bytes are all 'b' */
+    char *dst_header = (char*)res.dst_header_mr->addr;
+    for (int i = 0; i < 20; i++) {
+        if (dst_header[i] != 'b') {
+            err("Validation failed: dst header byte %d is %c, expected 'b'\n", i, dst_header[i]);
+            goto free_res_and_exit;
+        }
+    }
+    info("Dst header validation passed - all bytes are 'b'\n");
+    /* Validate dst data bytes are all 'a' */
+    char *dst_data = (char*)res.dst_data_mr->addr;
+    for (int i = 0; i < 4096; i++) {
+        if (dst_data[i] != 'a') {
+            err("Validation failed: dst data byte %d is %c, expected 'a'\n", i, dst_data[i]);
+            goto free_res_and_exit;
+        }
+    }
+    info("Dst data validation passed - all bytes are 'a'\n");
 
     if (*(uint32_t *)res.pi_mr->addr == 0x26c74ca2) {
         info("\n!!!! %s supports CRC32C offload under real test!!!!\n\n", ibv_get_device_name(res.ib_ctx->device));
