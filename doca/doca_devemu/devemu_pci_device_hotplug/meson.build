@@ -25,7 +25,7 @@
 project('DOCA_SAMPLE', 'C', 'CPP',
 	# Get version number from file.
 	version: run_command(find_program('cat'),
-		files('/opt/mellanox/doca/applications/VERSION'), check: true).stdout().strip(),
+		files('../VERSION'), check: true).stdout().strip(),
 	license: 'Proprietary',
 	default_options: ['buildtype=debug'],
 	meson_version: '>= 0.61.2'
@@ -56,21 +56,21 @@ sample_srcs = [
 	# Common code for the DOCA library samples
 	'../devemu_pci_common.c',
 	# Common code for all DOCA samples
-	'../../common.c',
+	'../common.c',
 ]
 
 sample_inc_dirs  = []
-# Common DOCA library logic
+# hotplug application logic
+sample_inc_dirs += include_directories('.')
+# doca_devemu application common logic
 sample_inc_dirs += include_directories('..')
-# Common DOCA logic (samples)
-sample_inc_dirs += include_directories('../..')
-# Common DOCA logic
-sample_inc_dirs += include_directories('../../..')
 # Common DOCA logic (applications)
-sample_inc_dirs += include_directories('../../../applications/common/')
+sample_inc_dirs += include_directories('/opt/mellanox/doca/applications/common/')
+# Common DOCA logic
+sample_inc_dirs += include_directories('/opt/mellanox/doca')
 
 executable('doca_' + SAMPLE_NAME, sample_srcs,
 	c_args : '-Wno-missing-braces',
 	dependencies : sample_dependencies,
 	include_directories: sample_inc_dirs,
-	install: false)
+	install: true)
