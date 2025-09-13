@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright(c) 2025 Liu, Changcheng <changcheng.liu@aliyun.com>
+
+option('verbose', type: 'boolean', value: false,
+       description: 'verbose build')
+
+option('enable_debug', type: 'boolean', value: false,
+        description: 'Enable debug build')
+
+option('cpu', type: 'array', value: ['bf3'], choices: ['cx7', 'bf3', 'cx8'],
+    description: 'Indicates which types of DPA CPU are going to be used.')
+
+#option('flexio_include_path', type: 'string', value: '',
+#       description: 'flexio-sdk headers path')
+#
+#option('flexio_lib_path', type: 'string', value: '',
+#       description: 'flexio-sdk libraries path')
+#
+#option('flexio_libc_path', type: 'string', value: '',
+#       description: 'flexio-sdk libc libraries path')
